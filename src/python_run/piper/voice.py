@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 import numpy as np
 import onnxruntime
 from piper_phonemize import phonemize_codepoints, phonemize_espeak, tashkeel_run
+from dp.phonemizer import Phonemizer
 
 from .config import PhonemeType, PiperConfig
 from .const import BOS, EOS, PAD
@@ -20,12 +21,14 @@ _LOGGER = logging.getLogger(__name__)
 class PiperVoice:
     session: onnxruntime.InferenceSession
     config: PiperConfig
+    dp: Phonemizer
 
     @staticmethod
     def load(
         model_path: Union[str, Path],
         config_path: Optional[Union[str, Path]] = None,
         use_cuda: bool = False,
+        dp_model_path: Optional[Union[str, Path]] = None,
     ) -> "PiperVoice":
         """Load an ONNX model and config."""
         if config_path is None:
@@ -45,6 +48,12 @@ class PiperVoice:
         else:
             providers = ["CPUExecutionProvider"]
 
+        dp=None
+        if dp_model_path:
+            print ('loading phonemizer model %s ...' % dp_model_path)
+            dp = Phonemizer.from_checkpoint(dp_model_path)
+            print ('loading phonemizer model %s ... done' % dp_model_path)
+
         return PiperVoice(
             config=PiperConfig.from_dict(config_dict),
             session=onnxruntime.InferenceSession(
@@ -52,6 +61,7 @@ class PiperVoice:
                 sess_options=onnxruntime.SessionOptions(),
                 providers=providers,
             ),
+            dp=dp,
         )
 
     def phonemize(self, text: str) -> List[List[str]]:
@@ -66,6 +76,11 @@ class PiperVoice:
 
         if self.config.phoneme_type == PhonemeType.TEXT:
             return phonemize_codepoints(text)
+
+        if self.config.phoneme_type == PhonemeType.DEEPPHONEMIZER:
+            # breakpoint()
+            phonemess = self.dp(text, lang=self.config.espeak_voice)
+            return [[*phonemess]]
 
         raise ValueError(f"Unexpected phoneme type: {self.config.phoneme_type}")
 
