@@ -19,7 +19,7 @@ data_files = [module_dir / "voices.json"]
 
 setup(
     name="piper-tts",
-    version="1.2.0+2",
+    version="1.2.0+3",
     description="A fast, local neural text to speech system that sounds great and is optimized for the Raspberry Pi 4.",
     url="http://github.com/rhasspy/piper",
     author="Michael Hansen",

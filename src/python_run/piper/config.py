@@ -36,6 +36,9 @@ class PiperConfig:
     phoneme_type: PhonemeType
     """espeak or text"""
 
+    speaker_id_map: Mapping[str, int]
+    """Speaker -> id"""
+
     @staticmethod
     def from_dict(config: Dict[str, Any]) -> "PiperConfig":
         inference = config.get("inference", {})
@@ -51,4 +54,7 @@ class PiperConfig:
             espeak_voice=config["espeak"]["voice"],
             phoneme_id_map=config["phoneme_id_map"],
             phoneme_type=PhonemeType(config.get("phoneme_type", PhonemeType.ESPEAK)),
+            #
+            speaker_id_map=config["speaker_id_map"] if config["num_speakers"]>1 else {},
         )
+
