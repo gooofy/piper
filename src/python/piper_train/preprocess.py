@@ -26,6 +26,7 @@ from piper_phonemize import (
 )
 
 from .norm_audio import cache_norm_audio, make_silence_detector
+from dp.phonemizer import Phonemizer
 
 _DIR = Path(__file__).parent
 _VERSION = (_DIR / "VERSION").read_text(encoding="utf-8").strip()
@@ -39,8 +40,14 @@ class PhonemeType(str, Enum):
     TEXT = "text"
     """Phonemes come from text itself"""
 
+    DEEPPHONEMIZER = "DeepPhonemizer"
+    """DeepPhonemizer is a library for grapheme to phoneme conversion based on Transformer models."""
+
 
 def main() -> None:
+    
+    global dp_model, args
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--input-dir", required=True, help="Directory with audio dataset"
@@ -103,6 +110,7 @@ def main() -> None:
     parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to the console"
     )
+    parser.add_argument("--dp-model", help="DeepPhonemizer model")
     args = parser.parse_args()
 
     if args.single_speaker and (args.speaker_id is not None):
@@ -208,6 +216,8 @@ def main() -> None:
     # Start workers
     if args.phoneme_type == PhonemeType.TEXT:
         target = phonemize_batch_text
+    elif args.phoneme_type == PhonemeType.DEEPPHONEMIZER:
+        target = phonemize_batch_deepphonemizer
     else:
         target = phonemize_batch_espeak
 
@@ -377,6 +387,71 @@ def phonemize_batch_text(
             queue_in.task_done()
     except Exception:
         _LOGGER.exception("phonemize_batch_text")
+
+
+def phonemize_batch_deepphonemizer(
+    args: argparse.Namespace, queue_in: JoinableQueue, queue_out: Queue
+):
+    try:
+        casing = get_text_casing(args.text_casing)
+        silence_detector = make_silence_detector()
+
+        if args.dp_model:
+            _LOGGER.info('loading phonemizer model %s ...' % args.dp_model)
+            dp_model = Phonemizer.from_checkpoint(args.dp_model)
+
+        while True:
+            utt_batch = queue_in.get()
+            if utt_batch is None:
+                break
+
+            for utt in utt_batch:
+                try:
+                    if args.tashkeel:
+                        utt.text = tashkeel_run(utt.text)
+
+                    # args.language=de
+                    # all_phonemes=[['d', 'ɔ', 'x', ' ', 'd', 'a', 's', ' ', 'z', 'ˌ', 'ɔ', 'l', ' ', 'z', 'ɪ', 'c', '̧', ' ', 'n', 'ˈ', 'u', 'ː', 'n', ' ', 'ˈ', 'ɛ', 'n', 'd', 'ɜ', 'n', '.']]
+                    # utt.phonemes=['d', 'ɔ', 'x', ' ', 'd', 'a', 's', ' ', 'z', 'ˌ', 'ɔ', 'l', ' ', 'z', 'ɪ', 'c', '̧', ' ', 'n', 'ˈ', 'u', 'ː', 'n', ' ', 'ˈ', 'ɛ', 'n', 'd', 'ɜ', 'n', '.']
+                    # utt.phoneme_ids=[1, 0, 17, 0, 54, 0, 36, 0, 3, 0, 17, 0, 14, 0, 31, 0, 3, 0, 38, 0, 121, 0, 54, 0, 24, 0, 3, 0, 38, 0, 74, 0, 16, 0, 140, 0, 3, 0, 26, 0, 120, 0, 33, 0, 122, 0, 26, 0, 3, 0, 120, 0, 61, 0, 26, 0, 17, 0, 62, 0, 26, 0, 10, 0, 2]
+
+                    #_LOGGER.debug('args.language=%s' % args.language)
+                    #_LOGGER.debug(utt)
+
+                    phonemess = dp_model(utt.text, lang=args.language)
+                    utt.phonemes = [*phonemess]
+
+                    #all_phonemes = phonemize_espeak(casing(utt.text), args.language)
+                    #_LOGGER.debug("all_phonemes=%s" % repr(all_phonemes))
+                    ## Flatten
+                    #utt.phonemes = [
+                    #    phoneme
+                    #    for sentence_phonemes in all_phonemes
+                    #    for phoneme in sentence_phonemes
+                    #]
+                    #_LOGGER.debug("utt.phonemes=%s" % repr(utt.phonemes))
+                    utt.phoneme_ids = phoneme_ids_espeak(
+                        utt.phonemes,
+                        missing_phonemes=utt.missing_phonemes,
+                    )
+                    #_LOGGER.debug("utt.phoneme_ids=%s" % repr(utt.phoneme_ids))
+                    if not args.skip_audio:
+                        utt.audio_norm_path, utt.audio_spec_path = cache_norm_audio(
+                            utt.audio_path,
+                            args.cache_dir,
+                            silence_detector,
+                            args.sample_rate,
+                        )
+                    queue_out.put(utt)
+                except TimeoutError:
+                    _LOGGER.error("Skipping utterance due to timeout: %s", utt)
+                except Exception:
+                    _LOGGER.exception("Failed to process utterance: %s", utt)
+                    queue_out.put(None)
+
+            queue_in.task_done()
+    except Exception:
+        _LOGGER.exception("phonemize_batch_espeak")
 
 
 # -----------------------------------------------------------------------------
